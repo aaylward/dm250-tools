@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Building linux-dm250 on Apple Silicon</title>
+<style>
+  :root {
+    --fg: #1f2328;
+    --muted: #57606a;
+    --bg: #ffffff;
+    --bg-alt: #f6f8fa;
+    --border: #d0d7de;
+    --accent: #0969da;
+    --warn-bg: #fff8c5;
+    --warn-border: #d4a72c;
+    --danger-bg: #ffebe9;
+    --danger-border: #cf222e;
+    --code-bg: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.55; font-size: 15px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .layout { display: grid; grid-template-columns: 260px minmax(0, 1fr);
+    max-width: 1200px; margin: 0 auto; }
+
+  nav.side {
+    position: sticky; top: 0; align-self: start;
+    height: 100vh; overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: 1.4em 1.2em; background: var(--bg-alt);
+  }
+  nav.side h2 { font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); margin: 1.4em 0 0.4em; }
+  nav.side h2:first-child { margin-top: 0; }
+  nav.side ul { list-style: none; margin: 0; padding: 0; }
+  nav.side li { margin: 0.15em 0; }
+  nav.side a { display: block; padding: 0.25em 0.4em; border-radius: 4px; color: var(--fg); font-size: 0.92em; }
+  nav.side a:hover { background: #eaeef2; text-decoration: none; }
+
+  main { padding: 2em 2.4em; max-width: 880px; }
+  main > section { margin-bottom: 2.6em; }
+  h1 { margin-top: 0; font-size: 1.8em; }
+  h2 { border-bottom: 1px solid var(--border); padding-bottom: 0.25em;
+    margin-top: 2em; font-size: 1.35em; }
+  h3 { margin-top: 1.4em; font-size: 1.08em; }
+
+  code, pre { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 0.12em 0.35em; border-radius: 3px; font-size: 0.88em; }
+  pre { background: var(--code-bg); padding: 0.9em 1em; border-radius: 6px;
+    overflow-x: auto; font-size: 0.85em; border: 1px solid var(--border); }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  .note, .warn, .danger { padding: 0.7em 1em; margin: 1em 0; border-radius: 6px;
+    border-left: 4px solid; }
+  .note { background: var(--bg-alt); border-color: var(--accent); }
+  .warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .danger { background: var(--danger-bg); border-color: var(--danger-border); }
+  .note strong, .warn strong, .danger strong { display: inline-block; margin-right: 0.3em; }
+
+  table { border-collapse: collapse; margin: 1em 0; width: 100%; font-size: 0.92em; }
+  th, td { border: 1px solid var(--border); padding: 0.4em 0.7em; text-align: left;
+    vertical-align: top; }
+  th { background: var(--bg-alt); }
+
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.15em 0; }
+
+  .toc-section + .toc-section { margin-top: 0.6em; }
+
+  @media (max-width: 800px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.side { position: static; height: auto; border-right: none;
+      border-bottom: 1px solid var(--border); }
+    main { padding: 1.4em; }
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+<nav class="side">
+  <h2>Before you start</h2>
+  <ul>
+    <li><a href="#target">Target summary</a></li>
+    <li><a href="#backup">Back up stock firmware</a></li>
+    <li><a href="#fork-choice">Pick a fork base</a></li>
+  </ul>
+
+  <h2>Dev environment</h2>
+  <ul>
+    <li><a href="#tooling">Tooling decision</a></li>
+    <li><a href="#docker-setup">Docker setup on macOS</a></li>
+    <li><a href="#gcc">GCC version</a></li>
+    <li><a href="#alt-routes">Alt routes (Homebrew, VM)</a></li>
+  </ul>
+
+  <h2>Configuring the build</h2>
+  <ul>
+    <li><a href="#defconfig">Pick a defconfig</a></li>
+    <li><a href="#config-gaps">Config gaps to fill</a></li>
+    <li><a href="#verify-config">Verify .config</a></li>
+    <li><a href="#modules-vs-y">=y vs =m</a></li>
+  </ul>
+
+  <h2>Build &amp; flash</h2>
+  <ul>
+    <li><a href="#build">Build commands</a></li>
+    <li><a href="#sanity">Sanity checks</a></li>
+    <li><a href="#bootable">Bootable image</a></li>
+  </ul>
+
+  <h2>SD-first validation</h2>
+  <ul>
+    <li><a href="#sd-why">Why boot from SD first</a></li>
+    <li><a href="#sd-layout">SD card layout</a></li>
+    <li><a href="#sd-workflow">Boot &amp; validate workflow</a></li>
+    <li><a href="#sd-risks">Reversibility caveats</a></li>
+  </ul>
+
+  <h2>Driver gaps</h2>
+  <ul>
+    <li><a href="#gap-rk818">RK818 charger/battery</a></li>
+    <li><a href="#gap-firmware">brcmfmac firmware</a></li>
+  </ul>
+
+  <h2>Reference</h2>
+  <ul>
+    <li><a href="#quickref">Full command sequence</a></li>
+  </ul>
+</nav>
+
+<main>
+
+<h1>Building <code>linux-dm250</code> for the Pomera DM250 on an Apple Silicon Mac</h1>
+
+<!-- ============================================================ -->
+<section id="before-you-start">
+<h2>Before you start tinkering</h2>
+
+<section id="target">
+<h3>Target summary</h3>
+<table>
+  <tr><th>Item</th><th>Value</th></tr>
+  <tr><td>SoC</td><td>Rockchip RK3128</td></tr>
+  <tr><td>CPU</td><td>4 &times; Cortex-A7 (ARMv7-A, 32-bit, hard-float)</td></tr>
+  <tr><td>Kernel arch</td><td><code>ARCH=arm</code> (not <code>arm64</code>)</td></tr>
+  <tr><td>Toolchain triplet</td><td><code>arm-linux-gnueabihf-</code></td></tr>
+  <tr><td>Defconfig</td><td><code>multi_v7_defconfig</code> (covers RK3128)</td></tr>
+  <tr><td>Build artifacts</td><td><code>arch/arm/boot/zImage</code>, <code>arch/arm/boot/dts/rockchip/pomera-dm250.dtb</code></td></tr>
+</table>
+<p>Mainline does not ship a <code>pomera_defconfig</code>. <code>multi_v7_defconfig</code> is the canonical ARMv7 multi-platform config and already enables <code>CONFIG_ARCH_ROCKCHIP</code>, the RK3128 clock/pinctrl drivers, Lima GPU, etc. Several DM250-specific options are missing and must be added by hand &mdash; see <a href="#config-gaps">config gaps</a>.</p>
+</section>
+
+<section id="backup">
+<h3>Back up stock firmware before doing anything destructive</h3>
+
+<div class="danger">
+  <strong>Do this first.</strong> You will lose the proprietary <code>brcmfmac</code> Wi-Fi firmware, the BT patchram, calibration NVRAM, and possibly bootloader env if you reflash blindly. Mainline Linux does not ship these blobs.
+</div>
+
+<h4>What you're trying to save</h4>
+<ul>
+  <li><strong>Full eMMC image</strong> &mdash; one big <code>.img</code> file containing every partition. This is the master backup; everything else can be extracted from it.</li>
+  <li><strong>Wi-Fi/BT firmware blobs</strong> &mdash; live inside the stock rootfs at paths like <code>/lib/firmware/brcm/brcmfmac43430-sdio.bin</code>, <code>brcmfmac43430-sdio.txt</code> (per-board NVRAM), <code>brcmfmac43430-sdio.clm_blob</code>, plus BT patchram (<code>BCM43430A1.hcd</code> or similar). Without these, <code>brcmfmac</code> loads but the radio stays dark.</li>
+  <li><strong>MAC address / calibration NVRAM</strong> &mdash; small partition holding per-device data. Captured automatically as part of the full eMMC image.</li>
+  <li><strong>Bootloader (idbloader + u-boot.itb)</strong> &mdash; captured automatically too.</li>
+</ul>
+
+<h4>Recommended method: MASKROM mode + <code>rkdeveloptool</code> over USB</h4>
+
+<p>The cleanest backup path. Plug DM250 into MacBook, put the SoC into MASKROM mode, dump the eMMC over USB. No need to boot the stock OS, no need for serial console.</p>
+
+<p><strong>How it works:</strong> Rockchip SoCs have a hardware-level recovery state called <em>MASKROM mode</em>. The BootROM enumerates as a USB device. The host pushes a small loader stub into SRAM, which brings up DDR + eMMC, then accepts read/write commands. The stock firmware is bypassed entirely.</p>
+
+<h5>1. Install <code>rkdeveloptool</code> on the Mac</h5>
+<p>No reliable Homebrew formula. Build from source:</p>
+<pre><code>brew install autoconf automake libusb pkg-config
+
+git clone https://github.com/rockchip-linux/rkdeveloptool.git
+cd rkdeveloptool
+autoreconf -i
+./configure
+make
+sudo cp rkdeveloptool /usr/local/bin/
+</code></pre>
+
+<h5>2. Fetch the RK3128 loader blob</h5>
+<p>The DDR-init + eMMC-bringup loader for RK3128. Rockchip publishes these in <code>rkbin</code>:</p>
+<pre><code>git clone https://github.com/rockchip-linux/rkbin.git
+ls rkbin/bin/rk31/ | grep -i loader
+# e.g. rk3128_loader_v1.13.116.bin
+</code></pre>
+<p>Note the exact filename; you'll pass it to <code>rkdeveloptool db</code> below.</p>
+
+<h5>3. Put DM250 into MASKROM mode</h5>
+<p>Three possible entry methods (try in order):</p>
+<ol>
+  <li><strong>Key combo at power-on.</strong> Hold a specific key (often the recovery/menu key) while pressing power, with USB already connected. Check <a href="http://www.loper-os.org/?p=4118">asciilifeform's DM250 notes</a> for the exact combo &mdash; it isn't documented in this fork.</li>
+  <li><strong>Loader mode via u-boot.</strong> If you have serial console, interrupt at the u-boot prompt and run <code>rockusb 0 mmc 0</code> &mdash; u-boot then exposes the eMMC as a Rockchip USB device. Same protocol, slightly different mode (Loader mode rather than MASKROM).</li>
+  <li><strong>Short the MASKROM test point.</strong> RK3128 has a test point on the PCB that, when shorted to ground at power-on, forces MASKROM regardless of eMMC contents. Last-resort method &mdash; requires opening the case and identifying the pad. Photo references for DM250 may exist in asciilifeform's writeup.</li>
+</ol>
+
+<h5>4. Confirm the Mac sees the device</h5>
+<pre><code>rkdeveloptool ld
+# Expected output (MASKROM mode):
+# DevNo=1   Vid=0x2207,Pid=0x310b,LocationID=...    Maskrom
+#
+# Or in Loader mode:
+# DevNo=1   Vid=0x2207,Pid=0x310b,LocationID=...    Loader
+</code></pre>
+
+<div class="warn">
+  Vid <code>0x2207</code> is Rockchip's USB vendor ID. Pid <code>0x310b</code> identifies RK3128 family. If <code>rkdeveloptool ld</code> prints nothing, the device is not in MASKROM/Loader mode &mdash; recheck the key combo. <code>system_profiler SPUSBDataType | grep -i rockchip</code> on the Mac is a useful sanity check.
+</div>
+
+<h5>5. Push the loader (MASKROM mode only)</h5>
+<p>Skip this step if <code>rkdeveloptool ld</code> showed "Loader" instead of "Maskrom".</p>
+<pre><code>rkdeveloptool db rkbin/bin/rk31/rk3128_loader_v1.13.116.bin
+# "Downloading bootloader succeeded."
+</code></pre>
+<p>After this, the chip is ready to read/write eMMC.</p>
+
+<h5>6. Inspect what's on eMMC</h5>
+<pre><code># Read flash info: size, sector count, page size
+rkdeveloptool rfi
+
+# Read the partition table (GPT or Rockchip parameter file)
+rkdeveloptool ppt
+</code></pre>
+<p>Note the total sector count from <code>rfi</code> &mdash; you'll need it for the full dump.</p>
+
+<h5>7. Dump the entire eMMC</h5>
+<pre><code># Replace &lt;SECTORS&gt; with the total sector count from `rfi`.
+# Each sector is 512 bytes. A 4 GB eMMC ≈ 7,633,920 sectors.
+rkdeveloptool rl 0 &lt;SECTORS&gt; dm250-stock.img
+
+# Compress for storage:
+zstd -19 dm250-stock.img       # ~5x smaller than raw
+sha256sum dm250-stock.img &gt; dm250-stock.img.sha256
+</code></pre>
+
+<h5>8. Reboot the device back to normal</h5>
+<pre><code>rkdeveloptool rd        # Reset device, power back to stock
+</code></pre>
+
+<h4>Extracting the Wi-Fi/BT blobs from the dump</h4>
+<p>Once you have <code>dm250-stock.img</code>, mount its partitions to extract <code>/lib/firmware/brcm/</code>. Easiest in Linux (do it in the same Docker builder container):</p>
+<pre><code># Inside the Debian container, with /build mounted:
+apt-get install -y kpartx
+losetup -fP --show dm250-stock.img    # e.g. /dev/loop0
+ls /dev/loop0p*                       # see partitions
+mkdir -p /mnt/rootfs
+
+# Try each partition; the rootfs is usually the largest ext4/squashfs.
+mount -o ro /dev/loop0pN /mnt/rootfs
+ls /mnt/rootfs/lib/firmware/brcm/
+mkdir -p /build/firmware-backup
+cp -a /mnt/rootfs/lib/firmware/brcm /build/firmware-backup/
+cp -a /mnt/rootfs/etc/firmware /build/firmware-backup/ 2>/dev/null || true
+umount /mnt/rootfs
+losetup -d /dev/loop0
+</code></pre>
+<p>If the rootfs is squashfs (likely &mdash; common for read-only embedded), use <code>unsquashfs</code> on the partition image instead of <code>mount</code>.</p>
+
+<div class="note">
+  <strong>Filenames matter.</strong> <code>brcmfmac</code> matches firmware by a name derived from chip + revision + the <code>brcm,bcm4329-fmac</code> compatible string in the DT. Don't rename files when copying. Copy the entire <code>brcm/</code> directory verbatim into your new rootfs at <code>/lib/firmware/brcm/</code>.
+</div>
+
+<h4>Verifying the backup before doing anything risky</h4>
+<ul>
+  <li><code>file dm250-stock.img</code> &rarr; should report a partitioned disk image.</li>
+  <li><code>fdisk -l dm250-stock.img</code> (or <code>gdisk -l</code>) &rarr; partition table visible.</li>
+  <li><code>strings dm250-stock.img | grep -i pomera</code> &rarr; should find references in u-boot and/or kernel command line, confirming the dump captured the bootloader region.</li>
+  <li><code>ls firmware-backup/brcm/</code> &rarr; should show at least <code>.bin</code>, <code>.txt</code>, and <code>.clm_blob</code> files for whatever 43xxx chip variant your unit has.</li>
+</ul>
+
+<h4>Restoring (if something goes wrong later)</h4>
+<pre><code># Boot DM250 back into MASKROM, push the loader as before, then:
+rkdeveloptool wl 0 dm250-stock.img    # Write Linear — restores byte-for-byte
+rkdeveloptool rd
+</code></pre>
+<p>This makes <strong>any</strong> later experiment recoverable, including a totally bricked eMMC bootloader. The MASKROM stage lives in on-die ROM and cannot be broken by software.</p>
+
+<div class="warn">
+  <strong>Caveat:</strong> If KING JIM blew the SECURE_BOOT eFuse on the RK3128 (signed boot), MASKROM mode may still work for reading, but loader push may fail because the chip refuses to execute unsigned loaders. The community consensus is that consumer Pomera units are <em>not</em> fused, but verify with <code>rkdeveloptool db</code> &mdash; if it succeeds, you're fine.
+</div>
+</section>
+
+<section id="fork-choice">
+<h3>Choosing the fork base</h3>
+<p>For a plain DM250 (non-US), the <strong>jcs fork</strong> is the better starting point than the asciilifeform base:</p>
+<ul>
+  <li>17 commits ahead, 0 behind asciilifeform. Strict superset for DM250 hardware.</li>
+  <li>Fixes real polarity / inversion bugs (tc35894 reset, SDMMC CD).</li>
+  <li>Fleshes out Wi-Fi/SDIO + Bluetooth GPIOs.</li>
+  <li>Delta is device-tree only &mdash; trivial to rebase onto newer mainline.</li>
+</ul>
+</section>
+</section>
+
+<!-- ============================================================ -->
+<section id="dev-environment">
+<h2>Dev environment setup</h2>
+
+<section id="tooling">
+<h3>Tooling decision: Docker vs. Homebrew vs. VM</h3>
+<table>
+  <tr><th>Option</th><th>Pros</th><th>Cons</th></tr>
+  <tr>
+    <td><strong>Docker</strong> (recommended)</td>
+    <td>Reproducible. Uses Debian/Ubuntu's <code>gcc-arm-linux-gnueabihf</code>. No host pollution. Works identically on Intel and Apple Silicon.</td>
+    <td>~1.5&times; slower than native because the container is <code>linux/arm64</code> running a 32-bit cross-compiler. Still fast on M-series.</td>
+  </tr>
+  <tr>
+    <td>Homebrew cross toolchain</td>
+    <td>Native, fastest.</td>
+    <td>No first-class formula. Needs the <code>messense/macos-cross-toolchains</code> tap. Case-insensitive FS, BSD <code>sed</code>, missing <code>elf.h</code> all bite.</td>
+  </tr>
+  <tr>
+    <td>Lima / UTM Linux VM</td>
+    <td>Full Linux build host, no Docker layer.</td>
+    <td>Disk/RAM overhead. More setup than Docker.</td>
+  </tr>
+</table>
+<p>Plan below uses Docker.</p>
+</section>
+
+<section id="docker-setup">
+<h3>Docker setup on macOS</h3>
+
+<h4>Install runtime</h4>
+<pre><code># OrbStack is faster than Docker Desktop on Apple Silicon
+brew install --cask orbstack
+# OR
+brew install --cask docker
+</code></pre>
+
+<div class="warn">
+  <strong>Known gotcha:</strong> if you previously had Docker Desktop and uninstalled it, <code>~/.docker/config.json</code> may still contain <code>"credsStore": "desktop"</code>. Any <code>docker pull</code> then fails with <code>docker-credential-desktop: executable file not found in $PATH</code>. Public images don't need credentials &mdash; just strip the field:
+  <pre><code>jq 'del(.credsStore)' ~/.docker/config.json &gt; ~/.docker/config.json.new \
+  &amp;&amp; mv ~/.docker/config.json.new ~/.docker/config.json</code></pre>
+  Also confirm a working context: <code>docker context ls</code>, then <code>docker context use orbstack</code> (or <code>default</code>) if <code>desktop-linux</code> is stale.
+</div>
+
+<h4>Launch the builder container</h4>
+<pre><code>cd ~/src/linux-dm250
+
+docker run --rm -it \
+  --platform=linux/arm64 \
+  -v "$PWD":/build -w /build \
+  debian:trixie bash
+</code></pre>
+
+<h4>Install the toolchain inside the container</h4>
+<pre><code>apt-get update
+apt-get install -y --no-install-recommends \
+  build-essential bc bison flex libssl-dev libelf-dev \
+  cpio kmod rsync git \
+  gcc-arm-linux-gnueabihf
+arm-linux-gnueabihf-gcc --version    # GCC 13/14 expected
+</code></pre>
+
+<div class="note">
+  <strong>One-time builder image:</strong> a ready-made <code>Dockerfile</code> at <code>~/src/dm250-tools/Dockerfile</code> bakes in all the kernel-build and SD-assembly packages. Build once with:
+  <pre><code>docker build --platform=linux/arm64 -t dm250-builder ~/src/dm250-tools</code></pre>
+  Then use <code>dm250-builder</code> as the image in <code>docker run</code> everywhere below.
+</div>
+</section>
+
+<section id="gcc">
+<h3>GCC version</h3>
+<p>Mainline kernel requires GCC &ge; 8.1 per <code>Documentation/process/changes.rst</code>. Newer is fine.</p>
+<table>
+  <tr><th>GCC</th><th>Recommendation</th></tr>
+  <tr><td>8.1 &ndash; 12</td><td>Works.</td></tr>
+  <tr><td>13 &ndash; 14</td><td>Recommended. Debian trixie / Ubuntu 24.04 default.</td></tr>
+  <tr><td>15 (latest)</td><td>Should work for v6.16. Expect occasional <code>-Wmaybe-uninitialized</code> noise.</td></tr>
+</table>
+<p>Simplest choice: whatever <code>gcc-arm-linux-gnueabihf</code> Debian/Ubuntu ships. Don't fight the toolchain.</p>
+<div class="note">
+  <strong>Why not Clang?</strong> Kernel supports Clang/LLVM, but RK3128 ARMv7 board builds are GCC-tested in practice. Stick with GCC unless you have a reason.
+</div>
+</section>
+
+<section id="alt-routes">
+<h3>Alt routes (skip Docker)</h3>
+<h4>Homebrew cross toolchain</h4>
+<pre><code>brew tap messense/macos-cross-toolchains
+brew install arm-unknown-linux-gnueabihf
+export CROSS_COMPILE=arm-unknown-linux-gnueabihf-
+export ARCH=arm
+make multi_v7_defconfig
+make -j"$(sysctl -n hw.ncpu)" zImage dtbs
+</code></pre>
+<div class="warn">
+  macOS's default APFS volume is case-insensitive. A few kernel files collide. Build on a case-sensitive APFS volume / disk image. Also install <code>gnu-sed</code> and <code>libelf</code> if the build complains.
+</div>
+</section>
+</section>
+
+<!-- ============================================================ -->
+<section id="configuring-build">
+<h2>Configuring the build</h2>
+
+<section id="defconfig">
+<h3>Pick a defconfig</h3>
+<pre><code># Inside the container, in /build:
+export ARCH=arm
+export CROSS_COMPILE=arm-linux-gnueabihf-
+
+make multi_v7_defconfig
+</code></pre>
+</section>
+
+<section id="config-gaps">
+<h3>Config gaps to fill</h3>
+
+<p>Derived by enumerating every <code>compatible = "..."</code> string in the DM250 device tree and tracing each to its Kconfig. Several are <em>not</em> set by <code>multi_v7_defconfig</code> and must be added manually with <code>make menuconfig</code>.</p>
+
+<table>
+  <tr><th>DT compatible</th><th>Kconfig</th><th>=y / =m</th><th>Notes</th></tr>
+  <tr><td><code>rockchip,rk3128</code></td><td><code>CONFIG_ARCH_ROCKCHIP</code></td><td>y</td><td>already on in multi_v7</td></tr>
+  <tr><td><code>rockchip,rk818</code></td><td><code>CONFIG_MFD_RK8XX_I2C</code>, <code>CONFIG_REGULATOR_RK808</code></td><td>y</td><td>RK808 driver also handles RK818</td></tr>
+  <tr><td><code>rockchip,rk818-charger</code>, <code>rk818-battery</code></td><td>(no Linux driver)</td><td>&mdash;</td><td>see <a href="#gap-rk818">driver gap</a></td></tr>
+  <tr><td><code>simple-battery</code></td><td><code>CONFIG_POWER_SUPPLY</code></td><td>y</td><td>info node only</td></tr>
+  <tr><td><code>toshiba,tc35894</code></td><td><code>CONFIG_MFD_TC3589X</code></td><td>y (bool)</td><td>not in multi_v7; must add</td></tr>
+  <tr><td><code>toshiba,tc3589x-keypad</code></td><td><code>CONFIG_KEYBOARD_TC3589X</code></td><td>y</td><td>not in multi_v7; must add</td></tr>
+  <tr><td>(TC3589X GPIO bank)</td><td><code>CONFIG_GPIO_TC3589X</code></td><td>y</td><td>Wi-Fi/BT enable pins live here</td></tr>
+  <tr><td><code>panel-lvds</code></td><td><code>CONFIG_DRM_PANEL_LVDS</code></td><td>y or m</td><td>LCD panel</td></tr>
+  <tr><td>Rockchip LVDS bridge</td><td><code>CONFIG_ROCKCHIP_LVDS</code></td><td>y</td><td>enabled by fork commit <code>1d5b0bbb</code></td></tr>
+  <tr><td>Rockchip display</td><td><code>CONFIG_DRM_ROCKCHIP</code>, <code>CONFIG_ROCKCHIP_VOP</code></td><td>y</td><td>display controller</td></tr>
+  <tr><td><code>pwm-backlight</code></td><td><code>CONFIG_BACKLIGHT_PWM</code></td><td>y</td><td></td></tr>
+  <tr><td>(Rockchip PWM)</td><td><code>CONFIG_PWM_ROCKCHIP</code></td><td>y</td><td></td></tr>
+  <tr><td>(RK3128 SARADC)</td><td><code>CONFIG_ROCKCHIP_SARADC</code></td><td>y or m</td><td>battery/temp sense</td></tr>
+  <tr><td><code>gpio-keys</code></td><td><code>CONFIG_KEYBOARD_GPIO</code></td><td>y</td><td>hardware buttons</td></tr>
+  <tr><td><code>gpio-leds</code></td><td><code>CONFIG_LEDS_GPIO</code>, <code>CONFIG_NEW_LEDS</code>, <code>CONFIG_LEDS_CLASS</code></td><td>y or m</td><td></td></tr>
+  <tr><td><code>regulator-fixed</code></td><td><code>CONFIG_REGULATOR_FIXED_VOLTAGE</code></td><td>y</td><td></td></tr>
+  <tr><td><code>mmc-pwrseq-simple</code></td><td><code>CONFIG_PWRSEQ_SIMPLE</code></td><td>y</td><td>SDIO Wi-Fi power sequencing</td></tr>
+  <tr><td>eMMC + SD (DWMMC)</td><td><code>CONFIG_MMC_DW</code>, <code>CONFIG_MMC_DW_ROCKCHIP</code></td><td>y</td><td>rootfs path &mdash; must be y</td></tr>
+  <tr><td><code>brcm,bcm4329-fmac</code></td><td><code>CONFIG_BRCMFMAC</code>, <code>CONFIG_BRCMFMAC_SDIO</code>, <code>CONFIG_CFG80211</code>, <code>CONFIG_MAC80211</code></td><td>m</td><td>needs firmware blob (see <a href="#gap-firmware">firmware gap</a>)</td></tr>
+  <tr><td><code>brcm,bcm43438-bt</code></td><td><code>CONFIG_BT</code>, <code>CONFIG_BT_HCIUART</code>, <code>CONFIG_BT_HCIUART_BCM</code>, <code>CONFIG_BT_BCM</code></td><td>m</td><td></td></tr>
+  <tr><td>RK808 RTC</td><td><code>CONFIG_RTC_DRV_RK808</code></td><td>y</td><td></td></tr>
+  <tr><td>RK3128 thermal</td><td><code>CONFIG_ROCKCHIP_THERMAL</code></td><td>y</td><td></td></tr>
+  <tr><td>DesignWare watchdog</td><td><code>CONFIG_DW_WATCHDOG</code></td><td>y</td><td>fork commit <code>1136007b</code> enables the node</td></tr>
+  <tr><td>Rockchip I2C</td><td><code>CONFIG_I2C_RK3X</code></td><td>y</td><td>TC35894 + RK818 are on I2C</td></tr>
+  <tr><td>Lima GPU</td><td><code>CONFIG_DRM_LIMA</code></td><td>m</td><td>fork commit <code>d972e679</code> enables the DT node</td></tr>
+  <tr><td>(DM250US only)</td><td><code>CONFIG_BATTERY_BQ27XXX</code>, charger BQ2515X</td><td>n</td><td>irrelevant for plain DM250</td></tr>
+</table>
+</section>
+
+<section id="verify-config">
+<h3>Verify .config in one shot</h3>
+<pre><code>grep -E "^CONFIG_(ARCH_ROCKCHIP|MFD_RK8XX_I2C|REGULATOR_RK808|MFD_TC3589X|KEYBOARD_TC3589X|GPIO_TC3589X|DRM_PANEL_LVDS|ROCKCHIP_LVDS|DRM_ROCKCHIP|ROCKCHIP_VOP|BACKLIGHT_PWM|PWM_ROCKCHIP|ROCKCHIP_SARADC|KEYBOARD_GPIO|LEDS_GPIO|REGULATOR_FIXED_VOLTAGE|PWRSEQ_SIMPLE|MMC_DW|MMC_DW_ROCKCHIP|BRCMFMAC|BT_HCIUART_BCM|RTC_DRV_RK808|ROCKCHIP_THERMAL|DW_WATCHDOG|I2C_RK3X|DRM_LIMA)=" .config | sort</code></pre>
+<p>Anything missing from the output is unset &mdash; turn it on via <code>make menuconfig</code>.</p>
+
+<div class="note">
+  Once a known-good <code>.config</code> boots end-to-end on hardware, run <code>make savedefconfig</code> and commit the result as <code>arch/arm/configs/pomera_defconfig</code>. Future rebuilds reduce to one command.
+</div>
+</section>
+
+<section id="modules-vs-y">
+<h3>=y vs =m rule of thumb</h3>
+<p>Anything you need in the path from power-on to "shell prompt" → <code>=y</code>. Everything else → <code>=m</code> to keep <code>zImage</code> small.</p>
+<ul>
+  <li><strong>Must be y:</strong> <code>MMC_DW</code>, <code>MMC_DW_ROCKCHIP</code>, rootfs FS, PMIC, clock/pinctrl/regulator core, <code>MFD_TC3589X</code> (it's <code>bool</code> &mdash; no choice).</li>
+  <li><strong>Fine as m:</strong> Wi-Fi, BT, Lima GPU, charger driver, hwmon. Loaded once userspace is up.</li>
+  <li><strong>Keyboard:</strong> <code>=y</code> if it's your only input; <code>=m</code> if you have serial console.</li>
+</ul>
+</section>
+</section>
+
+<!-- ============================================================ -->
+<section id="build-flash">
+<h2>Build &amp; flash</h2>
+
+<section id="build">
+<h3>Build commands</h3>
+<pre><code>NPROC=$(nproc)
+make -j"$NPROC" zImage modules dtbs
+</code></pre>
+<p>Outputs:</p>
+<ul>
+  <li><code>arch/arm/boot/zImage</code> &mdash; the kernel image</li>
+  <li><code>arch/arm/boot/dts/rockchip/pomera-dm250.dtb</code> &mdash; the device tree blob</li>
+  <li><code>./modules/</code> after <code>make modules_install INSTALL_MOD_PATH=./modules</code></li>
+</ul>
+</section>
+
+<section id="sanity">
+<h3>Sanity checks before flashing</h3>
+<ul>
+  <li><code>file arch/arm/boot/zImage</code> &rarr; <em>Linux kernel ARM boot executable zImage (little-endian)</em></li>
+  <li><code>strings arch/arm/boot/dts/rockchip/pomera-dm250.dtb | grep -i pomera</code> &rarr; should show <em>KING JIM Pomera DM250</em> (jcs fork) or <em>Rockchip RK3128 Pomera DM250</em> (asciilifeform).</li>
+  <li><code>grep -E "ROCKCHIP|LIMA|TC3589" .config</code> &rarr; rockchip drivers + TC3589X enabled.</li>
+  <li>Confirm firmware blobs from the <a href="#backup">backup step</a> are staged into the new rootfs at <code>/lib/firmware/brcm/</code>.</li>
+</ul>
+</section>
+
+<section id="bootable">
+<h3>Producing a bootable image</h3>
+<p>For RK3128 + u-boot the usual recipe is a FIT image or a <code>uImage</code> wrapper. If your boot pipeline expects <code>zImage</code> + <code>.dtb</code> side-by-side, stop after the build step.</p>
+<p><strong>Recommended first deployment: SD card, not eMMC.</strong> See <a href="#sd-validation">SD-first validation</a> for a non-destructive way to confirm the kernel boots and drives the hardware before touching internal storage.</p>
+<pre><code># u-boot legacy uImage (only if your bootloader wants it)
+make -j"$NPROC" UIMAGE_LOADADDR=0x60008000 uImage
+</code></pre>
+</section>
+</section>
+
+<!-- ============================================================ -->
+<section id="sd-validation">
+<h2>SD-first validation</h2>
+
+<section id="sd-why">
+<h3>Why boot from SD first</h3>
+
+<div class="note">
+  <strong>Two-step shortcut available.</strong> A companion script at <code>~/src/dm250-tools/mk-sd.sh</code> automates everything in this section &mdash; u-boot build, idbloader assembly, Alpine rootfs, partitioning, loader-sector writes. Usage:
+  <pre><code>docker run --rm --privileged \
+  -v "$HOME/src/linux-dm250":/build/linux-dm250 \
+  -v "$HOME/src/dm250-tools":/build/tools \
+  -w /build dm250-builder \
+  /build/tools/mk-sd.sh /build/sdcard.img
+
+sudo dd if=~/src/linux-dm250/sdcard.img of=/dev/rdiskN bs=4m status=progress</code></pre>
+  See <code>~/src/dm250-tools/README.md</code> for env-var knobs (firmware dir, image size, u-boot tag). The rest of this section explains what the script is doing under the hood &mdash; useful if you want to customize or debug.
+</div>
+
+<p>The RK3128 BootROM checks the SD card before eMMC for a valid loader (<code>idbloader.img</code> at sector 64). If you stage a complete bootable image on SD, you can validate your kernel, DTB, and driver coverage <strong>without overwriting the stock eMMC</strong>. Pull the SD card and the device boots stock again.</p>
+<p>The fork's <code>pomera-dm250.dts</code> already assumes this workflow:</p>
+<pre><code>aliases {
+    mmc0 = &amp;emmc;     /* internal eMMC */
+    mmc1 = &amp;sdmmc;    /* SD card slot  */
+};
+chosen {
+    bootargs = "... root=/dev/mmcblk1p2 rw rootwait";
+};
+</code></pre>
+<p><code>mmcblk1p2</code> is the second partition of the SD card. asciilifeform designed the port for SD-first development; jcs's fork keeps it.</p>
+</section>
+
+<section id="sd-layout">
+<h3>SD card layout</h3>
+<p>RK3128 expects the loader at fixed sector offsets, before the partition table's data area. Standard Rockchip layout:</p>
+<table>
+  <tr><th>Sector offset</th><th>Size</th><th>Contents</th></tr>
+  <tr><td>0</td><td>1 sector</td><td>GPT protective MBR + GPT header</td></tr>
+  <tr><td>64</td><td>~4 MB</td><td><code>idbloader.img</code> (DDR init + SPL, built from <code>rkbin</code>)</td></tr>
+  <tr><td>16384</td><td>~4 MB</td><td><code>u-boot.itb</code> (FIT image with u-boot + ATF/OP-TEE if used)</td></tr>
+  <tr><td>partition 1</td><td>~256 MB</td><td><code>/boot</code> (ext4 or FAT) with <code>zImage</code>, <code>pomera-dm250.dtb</code>, <code>extlinux/extlinux.conf</code></td></tr>
+  <tr><td>partition 2</td><td>rest</td><td><code>/</code> (ext4) &mdash; rootfs with <code>/lib/firmware/brcm/</code> blobs from <a href="#backup">backup step</a></td></tr>
+</table>
+
+<p>Minimal <code>extlinux/extlinux.conf</code>:</p>
+<pre><code>default linux-dm250
+prompt 0
+timeout 1
+
+label linux-dm250
+    kernel /zImage
+    fdt /pomera-dm250.dtb
+    append earlycon=uart8250,mmio32,0x20064000 console=ttyS1,115200n8 root=/dev/mmcblk1p2 rw rootwait
+</code></pre>
+
+<div class="note">
+  Building <code>idbloader.img</code> and <code>u-boot.itb</code> is a separate exercise from kernel build. Easiest path: clone <code>u-boot</code> mainline, <code>make rk3128_defconfig &amp;&amp; make CROSS_COMPILE=arm-linux-gnueabihf-</code>, then run <code>tools/mkimage</code> with the appropriate Rockchip DDR/miniloader blobs from <code>rkbin</code>. Both repos live on GitHub. Pomera-specific DT support in mainline u-boot is sparse &mdash; you may need to add a minimal u-boot DTS for RK3128 board variant. Or scavenge u-boot from asciilifeform's notes if published.
+</div>
+
+<p>Tool for writing the loader at sector 64 from macOS:</p>
+<pre><code># From inside the build container (SD card visible as /dev/disk?):
+dd if=idbloader.img of=/dev/sdX seek=64 conv=notrunc
+dd if=u-boot.itb   of=/dev/sdX seek=16384 conv=notrunc
+sync
+</code></pre>
+<p>On macOS host (outside Docker), the device is <code>/dev/rdiskN</code>. Unmount first with <code>diskutil unmountDisk /dev/diskN</code>. <strong>Triple-check the device name</strong> &mdash; <code>dd</code> to the wrong disk overwrites your Mac's SSD.</p>
+</section>
+
+<section id="sd-workflow">
+<h3>Boot &amp; validate workflow</h3>
+<ol>
+  <li>Build kernel + DTB + modules per the previous sections.</li>
+  <li>Build u-boot for RK3128 (or reuse a prebuilt one if available).</li>
+  <li>Partition SD card; <code>dd</code> idbloader + u-boot.itb at fixed offsets; format and populate partitions.</li>
+  <li>Install <code>modules_install INSTALL_MOD_PATH=&lt;sd-mountpoint&gt;</code>.</li>
+  <li>Copy the backed-up <code>brcmfmac</code> / BT blobs into <code>&lt;rootfs&gt;/lib/firmware/brcm/</code>.</li>
+  <li>Attach a serial console to <code>uart1</code> (115200 8N1). Without this, a failed boot is silent.</li>
+  <li>Insert SD, power on. Watch boot messages.</li>
+  <li>If stock u-boot runs first and ignores SD: interrupt at the u-boot prompt over serial, then manually:
+    <pre><code># In u-boot:
+mmc dev 1                       # switch to SD
+load mmc 1:1 0x62000000 zImage
+load mmc 1:1 0x68000000 pomera-dm250.dtb
+setenv bootargs 'console=ttyS1,115200n8 root=/dev/mmcblk1p2 rw rootwait'
+bootz 0x62000000 - 0x68000000</code></pre>
+    This confirms the SD boot path before you commit to eMMC reflash.
+  </li>
+  <li>Once Linux comes up, validate hardware:
+    <ul>
+      <li>Keyboard: <code>evtest /dev/input/event*</code></li>
+      <li>LCD: kernel should bring up the panel and print <code>fbcon</code> messages</li>
+      <li>Wi-Fi: <code>dmesg | grep brcmfmac</code>, then <code>ip link set wlan0 up</code></li>
+      <li>SD/MMC: <code>lsblk</code></li>
+      <li>Battery: <em>will not appear &mdash; see <a href="#gap-rk818">RK818 gap</a></em></li>
+    </ul>
+  </li>
+  <li>Only after the SD-booted kernel passes validation, decide whether to flash eMMC.</li>
+</ol>
+</section>
+
+<section id="sd-risks">
+<h3>Reversibility caveats</h3>
+<ul>
+  <li><strong>Stock u-boot on eMMC still runs first.</strong> If it's locked down / signed and refuses to chain-load from SD, you may need BootROM mode (boot-key combo at power-on, or shorting BOOT pin) to force SD-only boot. Confirm with asciilifeform's writeup before assuming behavior.</li>
+  <li><strong>u-boot env lives in eMMC.</strong> Any <code>saveenv</code> at the u-boot prompt mutates eMMC. To stay non-destructive, never <code>saveenv</code> &mdash; type bootcmds at the prompt each session, or set env in memory only.</li>
+  <li><strong>BootROM SD-first behavior is not absolute</strong> on all Rockchip designs; some boards have BOOT_SEL fused to eMMC. If your DM250 stubbornly ignores the SD card even from a cold boot with no eMMC chainload, BOOT_SEL is the suspect.</li>
+  <li><strong>The serial console is mandatory</strong> for this workflow. Locate the UART pads on the DM250 PCB and solder leads before powering on. Otherwise a failed boot tells you nothing.</li>
+</ul>
+</section>
+</section>
+
+<!-- ============================================================ -->
+<section id="driver-gaps">
+<h2>Known driver gaps</h2>
+
+<section id="gap-rk818">
+<h3>RK818 charger/battery have no mainline Linux driver</h3>
+<p>The device tree includes <code>rockchip,rk818-charger</code> and <code>rk818-battery</code> nodes, and the fork has a commit titled <em>"rk818-charger and rk818-battery work on OpenBSD"</em> which re-enables them. That title is precise:</p>
+<ul>
+  <li><strong>OpenBSD</strong> has drivers for the RK818 charger and fuel-gauge sub-blocks.</li>
+  <li><strong>Linux mainline does not.</strong> A grep through <code>drivers/</code> shows no driver bound to either compatible string. The PMIC core (<code>MFD_RK8XX_I2C</code>) provides regulators and RTC only.</li>
+</ul>
+<p>Practical effect on a Linux DM250:</p>
+<ul>
+  <li>Power rails work (regulators bring up CPU/RAM/peripherals).</li>
+  <li>RTC works.</li>
+  <li><strong>Battery percentage, charge state, and charging current are not reported.</strong> Userspace (<code>upower</code> etc.) sees no battery.</li>
+  <li>Charging itself still happens in hardware &mdash; the RK818 PMIC's charger is autonomous &mdash; but Linux can't query or configure it.</li>
+</ul>
+<p>Options:</p>
+<ol>
+  <li>Live without battery reporting (it still charges).</li>
+  <li>Port the OpenBSD <code>rk818_charger</code> driver to Linux. Non-trivial but bounded &mdash; the chip is documented in the RK818 datasheet, and OpenBSD's implementation is small.</li>
+  <li>Watch upstream: there have been periodic patches on the linux-rockchip list adding RK817/RK818 charger support, none merged as of v6.16-rc1.</li>
+</ol>
+<p>Don't waste time hunting for a Kconfig &mdash; it doesn't exist yet.</p>
+</section>
+
+<section id="gap-firmware">
+<h3>brcmfmac requires firmware blobs from stock</h3>
+<p>The <code>BRCMFMAC</code> driver alone is useless. It loads but the radio refuses to come up without:</p>
+<ul>
+  <li><code>brcmfmac43430-sdio.bin</code> &mdash; the firmware itself</li>
+  <li><code>brcmfmac43430-sdio.&lt;board&gt;.txt</code> &mdash; NVRAM with per-board calibration + MAC address</li>
+  <li><code>brcmfmac43430-sdio.clm_blob</code> &mdash; channel/locale matrix</li>
+  <li><code>BCM43430A1.hcd</code> &mdash; BT patchram for the BCM43438 BT side</li>
+</ul>
+<p>Exact filenames depend on the chip revision the driver detects. None of these are redistributable; mainline <code>linux-firmware</code> ships some 43xx blobs but not all variants and rarely the per-board NVRAM. <strong>You must extract them from the stock partition.</strong> See <a href="#backup">back up stock firmware</a>.</p>
+</section>
+</section>
+
+<!-- ============================================================ -->
+<section id="reference">
+<h2>Reference</h2>
+
+<section id="quickref">
+<h3>Full command sequence</h3>
+<pre><code>cd ~/src/linux-dm250
+
+docker run --rm -it --platform=linux/arm64 \
+  -v "$PWD":/build -w /build \
+  debian:trixie bash -c '
+    set -e
+    apt-get update
+    apt-get install -y --no-install-recommends \
+      build-essential bc bison flex libssl-dev libelf-dev \
+      cpio kmod rsync git gcc-arm-linux-gnueabihf
+    export ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+    make multi_v7_defconfig
+    # ... edit .config or run make menuconfig to fix the gaps above ...
+    make -j"$(nproc)" zImage modules dtbs
+  '
+
+ls -lh arch/arm/boot/zImage \
+       arch/arm/boot/dts/rockchip/pomera-dm250.dtb
+</code></pre>
+</section>
+</section>
+
+</main>
+</div>
+
+</body>
+</html>
